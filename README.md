@@ -100,6 +100,6 @@ Não é permitida a reprodução, distribuição ou utilização sem autorizaç�
 
 <div align="center">
 
-Desenvolvido com ❤️ por **Hiago Laureano**
+Desenvolvido com ❤️ por **Hiago Laureano & Matheus Freire**
 
 </div>
