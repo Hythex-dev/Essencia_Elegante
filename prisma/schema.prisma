@@ -9,8 +9,9 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 ///////////////////////
@@ -24,11 +25,17 @@ enum Role {
 
 enum OrderStatus {
   PENDING
-  PAID
   PROCESSING
   SHIPPED
   DELIVERED
   CANCELED
+}
+
+enum PaymentStatus {
+  PENDING
+  PROCESSING
+  APPROVED
+  REJECTED
   REFUNDED
 }
 
@@ -50,6 +57,12 @@ enum AccountType {
   OAUTH
 }
 
+enum PaymentGateway {
+  MERCADO_PAGO
+  STRIPE
+  ASAAS
+}
+
 /////////////////////////
 //
 // AUTHENTICATION
@@ -63,25 +76,28 @@ model User {
   email         String    @unique @db.VarChar(255)
   emailVerified DateTime?
   password      String?
-  image         String?
-  phone         String?   @db.VarChar(15)
+  imageUrl      String?   @db.Text
+  phone         String?   @db.VarChar(20)
+  role          Role      @default(CUSTOMER)
+  isActive      Boolean   @default(true)
+  cart          Cart?
 
-  role     Role    @default(CUSTOMER)
-  isActive Boolean @default(true)
+  orders    Order[]
+  accounts  Account[]
+  sessions  Session[]
+  addresses Address[]
 
-  accounts Account[]
-  sessions Session[]
-
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
   deletedAt DateTime?
+  auditLogs AuditLog[]
 }
 
 model Account {
   id String @id @default(uuid()) @db.Uuid
 
   userId String @db.Uuid
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Restrict)
 
   provider          AuthProvider
   providerAccountId String       @db.VarChar(255)
@@ -105,7 +121,7 @@ model Session {
 
   userId String @db.Uuid
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
 
   sessionToken String @unique @db.VarChar(255)
 
@@ -134,14 +150,317 @@ model VerificationToken {
 //
 //////////////////////////
 
+model Category {
+  id String @id @default(uuid()) @db.Uuid
+
+  parentId String? @db.Uuid
+
+  parent Category? @relation("CategoryHierarchy", fields: [parentId], references: [id], onDelete: Restrict)
+
+  children Category[] @relation("CategoryHierarchy")
+
+  products Product[]
+
+  name         String  @db.VarChar(150)
+  slug         String  @unique @db.VarChar(160)
+  description  String? @db.Text
+  displayOrder Int     @default(0)
+
+  isActive Boolean @default(true)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([parentId])
+}
+
+model Product {
+  id String @id @default(uuid()) @db.Uuid
+
+  categoryId String @db.Uuid
+
+  category Category @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+
+  variants ProductVariant[]
+
+  name        String  @db.VarChar(200)
+  slug        String  @unique @db.VarChar(220)
+  description String? @db.Text
+  isActive    Boolean @default(true)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([categoryId])
+}
+
+model Color {
+  id String @id @default(uuid()) @db.Uuid
+
+  variants ProductVariant[]
+
+  name     String  @unique @db.VarChar(50)
+  hexCode  String? @db.VarChar(7)
+  isActive Boolean @default(true)
+
+  createdAt DateTime  @default(now())
+  deletedAt DateTime?
+}
+
+model Size {
+  id String @id @default(uuid()) @db.Uuid
+
+  variants ProductVariant[]
+
+  label     String  @unique @db.VarChar(20)
+  sortOrder Int     @default(0)
+  isActive  Boolean @default(true)
+
+  createdAt DateTime  @default(now())
+  deletedAt DateTime?
+}
+
+model ProductVariant {
+  id String @id @default(uuid()) @db.Uuid
+
+  productId String @db.Uuid
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  colorId String? @db.Uuid
+
+  color Color? @relation(fields: [colorId], references: [id], onDelete: Restrict)
+
+  sizeId String? @db.Uuid
+
+  size Size? @relation(fields: [sizeId], references: [id], onDelete: Restrict)
+
+  images ProductImage[]
+
+  sku            String   @unique @db.VarChar(50)
+  price          Decimal  @db.Decimal(10, 2)
+  compareAtPrice Decimal? @db.Decimal(10, 2)
+  stock          Int      @default(0)
+  isActive       Boolean  @default(true)
+
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+  deletedAt  DateTime?
+  cartItems  CartItem[]
+  orderItems OrderItem[]
+
+  @@unique([productId, colorId, sizeId])
+  @@index([productId])
+  @@index([colorId])
+  @@index([sizeId])
+}
+
+model ProductImage {
+  id String @id @default(uuid()) @db.Uuid
+
+  variantId String @db.Uuid
+
+  variant ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+
+  url       String  @db.Text
+  altText   String? @db.VarChar(200)
+  isPrimary Boolean @default(false)
+  sortOrder Int     @default(0)
+
+  createdAt DateTime @default(now())
+
+  @@index([variantId])
+}
+
 /////////////////////////
 //
 // SHOPPING
 //
 ////////////////////////
 
+model Address {
+  id String @id @default(uuid()) @db.Uuid
+
+  userId String @db.Uuid
+
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  label         String  @db.VarChar(50)
+  recipientName String  @db.VarChar(150)
+  phone         String  @db.VarChar(20)
+  zipCode       String  @db.VarChar(9)
+  street        String  @db.VarChar(255)
+  number        String  @db.VarChar(20)
+  complement    String? @db.VarChar(255)
+  district      String  @db.VarChar(150)
+  city          String  @db.VarChar(150)
+  state         String  @db.VarChar(2)
+  isDefault     Boolean @default(false)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([userId])
+}
+
+model Cart {
+  id String @id @default(uuid()) @db.Uuid
+
+  userId String @unique @db.Uuid
+
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  items CartItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+}
+
+model CartItem {
+  id String @id @default(uuid()) @db.Uuid
+
+  cartId String @db.Uuid
+  cart   Cart   @relation(fields: [cartId], references: [id], onDelete: Cascade)
+
+  productVariantId String         @db.Uuid
+  productVariant   ProductVariant @relation(fields: [productVariantId], references: [id], onDelete: Restrict)
+
+  quantity  Int     @default(1)
+  unitPrice Decimal @db.Decimal(10, 2)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([cartId, productVariantId])
+  @@index([cartId])
+  @@index([productVariantId])
+}
+
+model Order {
+  id String @id @default(uuid()) @db.Uuid
+
+  orderNumber BigInt @unique
+
+  userId String @db.Uuid
+
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  items    OrderItem[]
+  payments Payment[]
+
+  status OrderStatus @default(PENDING)
+
+  recipientName String  @db.VarChar(150)
+  phone         String  @db.VarChar(20)
+  zipCode       String  @db.VarChar(9)
+  street        String  @db.VarChar(255)
+  number        String  @db.VarChar(20)
+  complement    String? @db.VarChar(255)
+  district      String  @db.VarChar(150)
+  city          String  @db.VarChar(150)
+  state         String  @db.VarChar(2)
+
+  subtotal     Decimal @db.Decimal(10, 2)
+  shippingCost Decimal @default(0) @db.Decimal(10, 2)
+  discount     Decimal @default(0) @db.Decimal(10, 2)
+  total        Decimal @db.Decimal(10, 2)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([status])
+}
+
+model OrderItem {
+  id String @id @default(uuid()) @db.Uuid
+
+  orderId String @db.Uuid
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  productVariantId String         @db.Uuid
+  productVariant   ProductVariant @relation(fields: [productVariantId], references: [id], onDelete: Restrict)
+
+  productName     String  @db.VarChar(200)
+  sku             String  @db.VarChar(50)
+  colorName       String? @db.VarChar(50)
+  sizeLabel       String? @db.VarChar(20)
+  productImageUrl String? @db.Text
+  quantity        Int
+  unitPrice       Decimal @db.Decimal(10, 2)
+  subtotal        Decimal @db.Decimal(10, 2)
+
+  createdAt DateTime @default(now())
+
+  @@index([orderId])
+  @@index([productVariantId])
+}
+
+model Payment {
+  id String @id @default(uuid()) @db.Uuid
+
+  orderId String @db.Uuid
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  method          PaymentMethod
+  status          PaymentStatus   @default(PENDING)
+  amount          Decimal         @db.Decimal(10, 2)
+  transactionId   String?         @db.VarChar(255)
+  gateway         PaymentGateway?
+  paidAt          DateTime?
+  gatewayResponse Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orderId])
+  @@index([status])
+}
+
 ////////////////////////
 //
 // ADMINISTRATION
 //
 ////////////////////////
+
+model AuditLog {
+  id String @id @default(uuid()) @db.Uuid
+
+  userId String? @db.Uuid
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  action String @db.VarChar(100)
+
+  entity String @db.VarChar(100)
+
+  entityId String @db.Uuid
+
+  ipAddress String? @db.VarChar(45)
+
+  userAgent String? @db.Text
+
+  metadata Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([entity])
+}
+
+model AdminNotification {
+  id String @id @default(uuid()) @db.Uuid
+
+  title String @db.VarChar(150)
+
+  message String @db.Text
+
+  isRead Boolean @default(false)
+
+  createdAt DateTime @default(now())
+}
